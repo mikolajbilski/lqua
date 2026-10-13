@@ -2,7 +2,7 @@
 # See EOC-LICENSE for details
 import ast
 from ast import (expr, stmt, Module, Name)
-from x86_ast import (X86Program, instr, arg, Variable)
+from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate)
 import os
 import sys
 
@@ -36,16 +36,57 @@ class Compiler:
     # The expression e passed to select_arg should furthermore be an atom.
     # (But there is no type for atoms, so the type of e is given as expr.)
     def select_arg(self, e: expr) -> arg:
-        # YOUR CODE HERE
-        pass        
+        match e:
+            case ast.Constant(int(val)):
+                return Immediate(val)
+            case Name(var):
+                return Variable(var)
+            case e:
+                raise SyntaxError(f"Expected atom, got: {e}")
 
     def select_stmt(self, s: stmt) -> list[instr]:
-        # YOUR CODE HERE
-        pass        
+        match s:
+            case ast.Expr(
+                value=ast.Call(
+                    func=Name('print'),
+                    args=[(ast.Constant(value=int()) | Name()) as atm]
+                )
+            ):
+                printed = self.select_arg(atm)
+            case ast.Assign(
+                targets=[Name(var)],
+                value=exp
+            ):
+                match exp:
+                    case ast.Call(
+                        func=Name('input_int'),
+                        args=[]
+                    ):
+                        #TODO: input_int
+                        pass
+                    case ast.BinOp(
+                        (ast.Constant(value=int()) | Name()) as a,
+                        (ast.Add() | ast.Sub()) as op,
+                        (ast.Constant(value=int()) | Name()) as b
+                    ):
+                        arg_a = self.select_arg(a)
+                        arg_b = self.select_arg(b)
+                        #TODO: addition/subtraction
+                    case ast.UnaryOp(
+                        ast.USub(),
+                        (ast.Constant(value=int()) | Name()) as a
+                    ):
+                        arg_a = self.select_arg(a)
+                        #TODO: unary minus
+            case e:
+                raise SyntaxError(f"Unspported statement type when processing line: {s}")
+        return [Instr("s", [Immediate(2)]), Instr("s", [Immediate(2)])]     
 
     def select_instructions(self, p: Module) -> X86Program:
-        # YOUR CODE HERE
-        pass        
+        program = X86Program(body=[])
+        for s in p.body:
+            program.body.extend(self.select_stmt(s))
+        return program
 
     ############################################################################
     # Assign Homes
