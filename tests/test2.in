@@ -1,0 +1,1 @@
+a = 1000 ; b = a + 2000 ; c = -b ; d = 5 + 3 ; e = c - d ; final = e + a ; print(final)
