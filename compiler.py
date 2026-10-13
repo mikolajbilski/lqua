@@ -84,6 +84,14 @@ class Compiler:
         # YOUR CODE HERE
         pass        
 
+def compile(source_ast: Module) -> X86Program:
+    compiler = Compiler()
+    program = compiler.select_instructions(source_ast)
+    program = compiler.assign_homes(program)
+    program = compiler.patch_instructions(program)
+    program = compiler.prelude_and_conclusion(program)
+    return program
+
 def construct_ast(source_code: str) -> Module:
     return ast.parse(source_code)
 
@@ -102,6 +110,8 @@ def main():
     
     source_code = read_input_file(sys.argv[1])
     ast = construct_ast(source_code)
+    compiled = compile(ast)
+    print(compiled)
 
 if __name__ == "__main__":
     main()
