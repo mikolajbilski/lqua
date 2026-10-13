@@ -2,7 +2,7 @@
 # See EOC-LICENSE for details
 import ast
 from ast import (expr, stmt, Module, Name)
-from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq)
+from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg)
 import os
 import sys
 
@@ -79,13 +79,13 @@ class Compiler:
                         b = self.select_arg(b)
                         instructions.append(movq(a, Reg("rax")))
                         instructions.append(movq(b, Reg("rcx")))
-                        instr = ""
+                        ins = ""
                         match op:
                             case ast.Add():
-                                instr = "addq"
+                                ins = "addq"
                             case ast.Sub():
-                                instr = "subq"
-                        instructions.append(Instr(instr, [Reg("rcx"), Reg("rax")]))
+                                ins = "subq"
+                        instructions.append(Instr(ins, [Reg("rcx"), Reg("rax")]))
                     case ast.UnaryOp(
                         ast.USub(),
                         (ast.Constant(value=int()) | Name()) as a
@@ -111,17 +111,35 @@ class Compiler:
     ############################################################################
 
     def assign_homes_arg(self, a: arg, home: dict[Variable, arg]) -> arg:
-        # YOUR CODE HERE
-        pass        
+        if not isinstance(a, Variable):
+            return a
+        if not a.id in home.keys():
+            print(f"new var: {a.id}")
+            self.var_count += 1
+            home[a.id] = Deref("rbp", -8 * self.var_count)
+        return home[a.id]
 
     def assign_homes_instr(self, i: instr,
                            home: dict[Variable, arg]) -> instr:
-        # YOUR CODE HERE
-        pass        
+        if not isinstance(i, Instr):
+            return i
+        new_args = []
+        for a in i.args:
+            new_args.append(self.assign_homes_arg(a, home))
+        return Instr(i.instr, new_args)
 
     def assign_homes(self, p: X86Program) -> X86Program:
-        # YOUR CODE HERE
-        pass        
+        home = {}
+        # There is an implicit assumption that a Compiler object will be used for compiling a single
+        # piece of code from start to finish, so we can store this value inside it. It's dirty, but it's
+        # better than recounting this in prelude_and_conclusion and assign_homes_{instr, arg}
+        self.var_count = 0
+
+        new_body = []
+        for ins in p.body:
+            new_body.append(self.assign_homes_instr(ins, home))
+        p.body = new_body
+        return p
 
     ############################################################################
     # Patch Instructions
@@ -140,8 +158,23 @@ class Compiler:
     ############################################################################
 
     def prelude_and_conclusion(self, p: X86Program) -> X86Program:
-        # YOUR CODE HERE
-        pass        
+        stack_size = 8 * (self.var_count if self.var_count % 2 == 0 else self.var_count + 1)
+        prelude = [
+            pushreg("rbp"),
+            movq("rsp", "rbp"),
+            Instr("subq", [Immediate(stack_size), Reg("rsp")])
+        ]
+        conclusion = [
+            movq("rbp", "rsp"),
+            movq(Immediate(0), "rax"),
+            popreg("rbp"),
+            Instr('retq', [])
+        ]
+        final_instructions = prelude
+        final_instructions.extend(p.body)
+        final_instructions.extend(conclusion)
+        p.body = final_instructions
+        return p
 
 def compile(source_ast: Module) -> X86Program:
     compiler = Compiler()
