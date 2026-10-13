@@ -41,10 +41,11 @@ class Compiler:
                 return Immediate(val)
             case Name(var):
                 return Variable(var)
-            case e:
+            case _:
                 raise SyntaxError(f"Expected atom, got: {e}")
 
     def select_stmt(self, s: stmt) -> list[instr]:
+        instructions = []
         match s:
             case ast.Expr(
                 value=ast.Call(
@@ -58,6 +59,9 @@ class Compiler:
                 value=exp
             ):
                 match exp:
+                    case (ast.Constant(value=int()) | Name()) as a:
+                        arg_a = self.select_arg(a)
+                        #TODO: simple assignment
                     case ast.Call(
                         func=Name('input_int'),
                         args=[]
@@ -78,7 +82,9 @@ class Compiler:
                     ):
                         arg_a = self.select_arg(a)
                         #TODO: unary minus
-            case e:
+                    case _:
+                        raise SyntaxError(f"Unspported expression type when processing line: {s}")
+            case _:
                 raise SyntaxError(f"Unspported statement type when processing line: {s}")
         return [Instr("s", [Immediate(2)]), Instr("s", [Immediate(2)])]     
 
