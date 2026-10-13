@@ -54,7 +54,7 @@ class Compiler:
                 )
             ):
                 printed = self.select_arg(atm)
-                instructions.append(movq(atm, Reg("rdi")))
+                instructions.append(movq(printed, Reg("rdi")))
                 instructions.append(Callq("print_int", 1))
             case ast.Assign(
                 targets=[Name() as target],
@@ -160,12 +160,12 @@ class Compiler:
         stack_size = 8 * (self.var_count if self.var_count % 2 == 0 else self.var_count + 1)
         prelude = [
             pushreg("rbp"),
-            movq("rsp", "rbp"),
+            movq(Reg("rsp"), Reg("rbp")),
             Instr("subq", [Immediate(stack_size), Reg("rsp")])
         ]
         conclusion = [
-            movq("rbp", "rsp"),
-            movq(Immediate(0), "rax"),
+            movq(Reg("rbp"), Reg("rsp")),
+            movq(Immediate(0), Reg("rax")),
             popreg("rbp"),
             Instr('retq', [])
         ]
