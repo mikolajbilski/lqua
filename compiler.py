@@ -132,8 +132,8 @@ class Compiler:
         pass        
 
     def patch_instructions(self, p: X86Program) -> X86Program:
-        # YOUR CODE HERE
-        pass        
+        # We made sure all instructions have at least 1 register argument in select_instructions, so we do nothing here
+        return p      
 
     ############################################################################
     # Prelude & Conclusion
