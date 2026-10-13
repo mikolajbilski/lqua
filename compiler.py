@@ -84,6 +84,9 @@ class Compiler:
         # YOUR CODE HERE
         pass        
 
+def construct_ast(source_code: str) -> Module:
+    return ast.parse(source_code)
+
 def read_input_file(path: str) -> str:
     try:
         with open(sys.argv[1], "r") as source_file:
@@ -98,6 +101,7 @@ def main():
         exit(1)
     
     source_code = read_input_file(sys.argv[1])
+    ast = construct_ast(source_code)
 
 if __name__ == "__main__":
     main()
