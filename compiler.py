@@ -2,7 +2,7 @@
 # See EOC-LICENSE for details
 import ast
 from ast import (expr, stmt, Module, Name)
-from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate)
+from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq)
 import os
 import sys
 
@@ -54,39 +54,51 @@ class Compiler:
                 )
             ):
                 printed = self.select_arg(atm)
+                instructions.append(movq(atm, Reg("rdi")))
+                instructions.append(Callq("print_int", 1))
             case ast.Assign(
-                targets=[Name(var)],
+                targets=[Name() as target],
                 value=exp
             ):
+                target = self.select_arg(target)
                 match exp:
                     case (ast.Constant(value=int()) | Name()) as a:
-                        arg_a = self.select_arg(a)
-                        #TODO: simple assignment
+                        a = self.select_arg(a)
+                        instructions.append(movq(a, Reg("rax")))
                     case ast.Call(
                         func=Name('input_int'),
                         args=[]
                     ):
-                        #TODO: input_int
-                        pass
+                        instructions.append(Callq("input_int", 0))
                     case ast.BinOp(
                         (ast.Constant(value=int()) | Name()) as a,
                         (ast.Add() | ast.Sub()) as op,
                         (ast.Constant(value=int()) | Name()) as b
                     ):
-                        arg_a = self.select_arg(a)
-                        arg_b = self.select_arg(b)
-                        #TODO: addition/subtraction
+                        a = self.select_arg(a)
+                        b = self.select_arg(b)
+                        instructions.append(movq(a, Reg("rax")))
+                        instructions.append(movq(b, Reg("rcx")))
+                        instr = ""
+                        match op:
+                            case ast.Add():
+                                instr = "addq"
+                            case ast.Sub():
+                                instr = "subq"
+                        instructions.append(Instr(instr, [Reg("rcx"), Reg("rax")]))
                     case ast.UnaryOp(
                         ast.USub(),
                         (ast.Constant(value=int()) | Name()) as a
                     ):
-                        arg_a = self.select_arg(a)
-                        #TODO: unary minus
+                        a = self.select_arg(a)
+                        instructions.append(movq(a, Reg("rax")))
+                        instructions.append(Instr("negq", [Reg("rax")]))
                     case _:
                         raise SyntaxError(f"Unspported expression type when processing line: {s}")
+                instructions.append(movq(Reg("rax"), target))
             case _:
                 raise SyntaxError(f"Unspported statement type when processing line: {s}")
-        return [Instr("s", [Immediate(2)]), Instr("s", [Immediate(2)])]     
+        return instructions     
 
     def select_instructions(self, p: Module) -> X86Program:
         program = X86Program(body=[])
