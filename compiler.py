@@ -114,7 +114,6 @@ class Compiler:
         if not isinstance(a, Variable):
             return a
         if not a.id in home.keys():
-            print(f"new var: {a.id}")
             self.var_count += 1
             home[a.id] = Deref("rbp", -8 * self.var_count)
         return home[a.id]
