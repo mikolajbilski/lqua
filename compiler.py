@@ -4,6 +4,7 @@ import ast
 from ast import (expr, stmt, Module, Name)
 from x86_ast import (X86Program, instr, arg, Variable)
 import os
+import sys
 
 Binding = tuple[Name, expr]
 Temporaries = list[Binding]
@@ -83,9 +84,20 @@ class Compiler:
         # YOUR CODE HERE
         pass        
 
-def main():
-    print("Hello from lqua!")
+def read_input_file(path: str) -> str:
+    try:
+        with open(sys.argv[1], "r") as source_file:
+            return source_file.read()
+    except OSError as e:
+        print(f"Error while reading the source file: {e}")
+        exit(1)
 
+def main():
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <input_file>")
+        exit(1)
+    
+    source_code = read_input_file(sys.argv[1])
 
 if __name__ == "__main__":
     main()
