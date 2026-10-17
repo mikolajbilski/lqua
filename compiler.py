@@ -98,9 +98,9 @@ class Compiler:
                         b = self.select_arg(b)
                         instructions.append(movq(a, dest))
                         instructions.append(movq(b, Reg("rcx")))
-                        instructions.append(Instr("cqto"), [])
-                        instructions.append(Instr("idivq"), [Reg("rcx")])
-                        if isinstance(op, ast.Mod()):
+                        instructions.append(Instr("cqto", []))
+                        instructions.append(Instr("idivq", [Reg("rcx")]))
+                        if isinstance(op, ast.Mod):
                             dest = Reg("rdx")
                     case ast.UnaryOp(
                         ast.USub(),
