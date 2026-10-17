@@ -89,6 +89,19 @@ class Compiler:
                             case ast.Mult():
                                 ins = "imulq"
                         instructions.append(Instr(ins, [Reg("rcx"), dest]))
+                    case ast.BinOp(
+                        (ast.Constant(value=int()) | Name()) as a,
+                        (ast.FloorDiv() | ast.Mod()) as op,
+                        (ast.Constant(value=int()) | Name()) as b
+                    ):
+                        a = self.select_arg(a)
+                        b = self.select_arg(b)
+                        instructions.append(movq(a, dest))
+                        instructions.append(movq(b, Reg("rcx")))
+                        instructions.append(Instr("cqto"), [])
+                        instructions.append(Instr("idivq"), [Reg("rcx")])
+                        if isinstance(op, ast.Mod()):
+                            dest = Reg("rdx")
                     case ast.UnaryOp(
                         ast.USub(),
                         (ast.Constant(value=int()) | Name()) as a
