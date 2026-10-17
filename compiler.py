@@ -61,10 +61,11 @@ class Compiler:
                 value=exp
             ):
                 target = self.select_arg(target)
+                dest = Reg("rax")
                 match exp:
                     case (ast.Constant(value=int()) | Name()) as a:
                         a = self.select_arg(a)
-                        instructions.append(movq(a, Reg("rax")))
+                        instructions.append(movq(a, dest))
                     case ast.Call(
                         func=Name('input_int'),
                         args=[]
@@ -77,7 +78,7 @@ class Compiler:
                     ):
                         a = self.select_arg(a)
                         b = self.select_arg(b)
-                        instructions.append(movq(a, Reg("rax")))
+                        instructions.append(movq(a, dest))
                         instructions.append(movq(b, Reg("rcx")))
                         ins = ""
                         match op:
@@ -87,17 +88,17 @@ class Compiler:
                                 ins = "subq"
                             case ast.Mult():
                                 ins = "imulq"
-                        instructions.append(Instr(ins, [Reg("rcx"), Reg("rax")]))
+                        instructions.append(Instr(ins, [Reg("rcx"), dest]))
                     case ast.UnaryOp(
                         ast.USub(),
                         (ast.Constant(value=int()) | Name()) as a
                     ):
                         a = self.select_arg(a)
-                        instructions.append(movq(a, Reg("rax")))
-                        instructions.append(Instr("negq", [Reg("rax")]))
+                        instructions.append(movq(a, dest))
+                        instructions.append(Instr("negq", [dest]))
                     case _:
                         raise SyntaxError(f"Unspported expression type when processing line: {s}")
-                instructions.append(movq(Reg("rax"), target))
+                instructions.append(movq(dest, target))
             case _:
                 raise SyntaxError(f"Unspported statement type when processing line: {s}")
         return instructions     
