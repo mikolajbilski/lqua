@@ -1,0 +1,11 @@
+x = 5
+y = 8
+z = 4
+a = x + y
+print(a)
+b = a % z
+c = a * x
+d = b - c
+print(b)
+print(c)
+print(d)
