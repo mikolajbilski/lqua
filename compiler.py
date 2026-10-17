@@ -97,10 +97,10 @@ class Compiler:
                         instructions.append(movq(a, dest))
                         instructions.append(Instr("negq", [dest]))
                     case _:
-                        raise SyntaxError(f"Unspported expression type when processing line: {s}")
+                        raise SyntaxError(f"Unsupported expression type when processing line: {s}")
                 instructions.append(movq(dest, target))
             case _:
-                raise SyntaxError(f"Unspported statement type when processing line: {s}")
+                raise SyntaxError(f"Unsupported statement type when processing line: {s}")
         return instructions     
 
     def select_instructions(self, p: Module) -> X86Program:
