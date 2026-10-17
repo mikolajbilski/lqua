@@ -10,3 +10,8 @@ dependencies = [
 
 [tool.uv.sources]
 mrj-support = { path = "../support", editable = true }
+
+[dependency-groups]
+dev = [
+    "colorama>=0.4.6",
+]
