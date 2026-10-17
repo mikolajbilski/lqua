@@ -72,7 +72,7 @@ class Compiler:
                         instructions.append(Callq("input_int", 0))
                     case ast.BinOp(
                         (ast.Constant(value=int()) | Name()) as a,
-                        (ast.Add() | ast.Sub()) as op,
+                        (ast.Add() | ast.Sub() | ast.Mult()) as op,
                         (ast.Constant(value=int()) | Name()) as b
                     ):
                         a = self.select_arg(a)
@@ -85,6 +85,8 @@ class Compiler:
                                 ins = "addq"
                             case ast.Sub():
                                 ins = "subq"
+                            case ast.Mult():
+                                ins = "imulq"
                         instructions.append(Instr(ins, [Reg("rcx"), Reg("rax")]))
                     case ast.UnaryOp(
                         ast.USub(),
