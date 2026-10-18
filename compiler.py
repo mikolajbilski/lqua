@@ -33,8 +33,7 @@ class Compiler:
         pass        
 
     def remove_complex_operands(self, p: Module) -> Module:
-        # YOUR CODE HERE
-        pass                
+        return p     
 
     ############################################################################
     # Select Instructions
@@ -200,7 +199,8 @@ class Compiler:
 
 def compile(source_ast: Module) -> X86Program:
     compiler = Compiler()
-    program = compiler.select_instructions(source_ast)
+    simplified_ast = compiler.remove_complex_operands(source_ast)
+    program = compiler.select_instructions(simplified_ast)
     program = compiler.assign_homes(program)
     program = compiler.patch_instructions(program)
     program = compiler.prelude_and_conclusion(program)
