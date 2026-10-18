@@ -1,0 +1,3 @@
+a = input_int() * 2
+b = input_int() + input_int()
+print(a + b - input_int())
