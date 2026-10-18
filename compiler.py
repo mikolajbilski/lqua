@@ -11,7 +11,14 @@ Temporaries = list[Binding]
 
 
 class Compiler:
+    var_count = 0
 
+
+    var_suffix = 0
+    def _generate_unique_var(self) -> str:
+        name = "x_" + str(self.var_suffix)
+        self.var_suffix += 1
+        return name
 
     ############################################################################
     # Remove Complex Operands
