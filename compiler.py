@@ -15,25 +15,79 @@ class Compiler:
 
 
     var_suffix = 0
-    def _generate_unique_var(self) -> str:
+    def _generate_unique_var(self) -> ast.Name:
         name = "x_" + str(self.var_suffix)
         self.var_suffix += 1
-        return name
+        return ast.Name(name)
 
     ############################################################################
     # Remove Complex Operands
     ############################################################################
 
     def rco_exp(self, e: expr, need_atomic : bool) -> tuple[expr, Temporaries]:
-        # YOUR CODE HERE
-        pass        
+        match e:
+            case (ast.Constant(value=int()) | Name()) as atm:
+                return (atm, [])
+            case ast.Call(
+                    func=Name('input_int'),
+                    args=[]
+                ):
+                if need_atomic:
+                    t = self._generate_unique_var()
+                    return (t, [(t, e)])
+                else:
+                    return (e, [])
+            case ast.BinOp(a, op, b):
+                a2, tmps_a = self.rco_exp(a, True)
+                b2, tmps_b = self.rco_exp(b, True)
+                e = ast.BinOp(a2, op, b2)
+                if need_atomic:
+                    t = self._generate_unique_var()
+                    return (t, tmps_a + tmps_b + [(t, e)])
+                else:
+                    return (e, tmps_a + tmps_b)
+            case ast.UnaryOp(op, a):
+                a2, tmps_a = self.rco_exp(a, True)
+                e = ast.UnaryOp(op, a2)
+                if need_atomic:
+                    t = self._generate_unique_var()
+                    return (t, tmps_a + [(t, e)])
+                else:
+                    return (e, tmps_a)
+            case _:
+                raise SyntaxError(f"Unsupported expression type when processing line: {e}")
 
     def rco_stmt(self, s: stmt) -> list[stmt]:
-        # YOUR CODE HERE
-        pass        
+        (simple_exp, temps) = (None, None)
+
+        match s:
+            case ast.Assign(
+                targets=[Name() as target],
+                value=exp
+            ):
+                simple_exp, temps = self.rco_exp(exp, False)
+                final_stmt = ast.Assign(targets=[target], value=simple_exp)
+            case ast.Expr(
+                value=ast.Call(
+                    func=Name('print'),
+                    args=[exp]
+                )
+            ):
+                simple_exp, temps = self.rco_exp(exp, True)
+                final_stmt = ast.Expr(ast.Call(func=Name('print'), args=[simple_exp]))
+            case _:
+                raise SyntaxError(f"Unsupported statement type when processing line: {s}")
+        simple_stmts = []
+        for temp in temps:
+            simple_stmts.append(ast.Assign(targets=[temp[0]], value=temp[1]))
+        simple_stmts.append(final_stmt)
+        return simple_stmts
 
     def remove_complex_operands(self, p: Module) -> Module:
-        return p     
+        simplified_ast = ast.Module(body=[], type_ignores=[])
+        for s in p.body:
+            simplified_ast.body.extend(self.rco_stmt(s))
+        return simplified_ast     
 
     ############################################################################
     # Select Instructions
@@ -116,10 +170,10 @@ class Compiler:
                         instructions.append(movq(a, dest))
                         instructions.append(Instr("negq", [dest]))
                     case _:
-                        raise SyntaxError(f"Unsupported expression type when processing line: {s}")
+                        raise SyntaxError(f"Unsupported expression type when processing line: {str(s)}")
                 instructions.append(movq(dest, target))
             case _:
-                raise SyntaxError(f"Unsupported statement type when processing line: {s}")
+                raise SyntaxError(f"Unsupported statement type when processing line: {str(s)}")
         return instructions     
 
     def select_instructions(self, p: Module) -> X86Program:
