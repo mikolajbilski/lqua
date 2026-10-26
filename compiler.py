@@ -8,6 +8,36 @@ import sys
 import argparse
 
 LOG_FILE = "compiler.log"
+AVAILABLE_REG = 11
+
+color_to_register = {
+    0: Reg("rcx"),
+    1: Reg("rdx"),
+    2: Reg("rsi"),
+    3: Reg("rdi"),
+    4: Reg("r8"),
+    5: Reg("r9"),
+    6: Reg("r10"),
+    7: Reg("rbx"),
+    8: Reg("r12"),
+    9: Reg("r13"),
+    10: Reg("r14"),
+    -1: Reg("rax"),
+    -2: Reg("rsp"),
+    -3: Reg("rbp"),
+    -4: Reg("r11"),
+    -5: Reg("r15"),
+}
+
+caller_saved = {
+    Reg("rax"), Reg("rcx"), Reg("rdx"),
+    Reg("rsi"), Reg("rdi"), Reg("r8"),
+    Reg("r9"), Reg("r10"), Reg("r11")}
+callee_saved = {
+    Reg("rbx"), Reg("rbp"),
+    Reg("r12"), Reg("r13"),
+    Reg("r14"), Reg("r15"),
+}
 
 Binding = tuple[Name, expr]
 Temporaries = list[Binding]
@@ -18,9 +48,13 @@ class Compiler:
     var_suffix: int
     var_current_alias: dict[str, str]
     debug: bool
+    reg_count: int
     live_after: dict[int, set[location]]
     write_set: dict[int, set[location]]
     interference_graph: UndirectedAdjList
+    vertex_colours: dict[location, int]
+    used_callee: set[Reg]
+    stack_var_count: int
 
     def _generate_unique_var(self) -> ast.Name:
         name = "x_" + str(self.var_suffix)
@@ -45,7 +79,7 @@ class Compiler:
                 writes.update([d])
             case Instr(
                 instr=("negq"),
-                args=(arg() as d)
+                args=(arg() as d,)
             ):
                 reads.update([d])
                 writes.update([d])
@@ -57,16 +91,22 @@ class Compiler:
                 writes.update([d])
             case Instr(
                 instr=("idivq"),
-                args=(arg() as x)
+                args=(arg() as x,)
             ):
                 reads.update([x, Reg("rax"), Reg("rdx")])
+                writes.update([Reg("rax"), Reg("rdx")])
+            case Instr(
+                instr=("cqto"),
+                args=()
+            ):
+                reads.update([Reg("rax")])
                 writes.update([Reg("rax"), Reg("rdx")])
             case Callq(
                 num_args=args
             ):
                 arg_regs = [Reg("rdi"), Reg("rsi"), Reg("rdx"), Reg("rcx"), Reg("r8"), Reg("r9")]
                 reads.update(arg_regs[:args])
-                writes.update([Reg("rax"), Reg("rcx"), Reg("rdx"), Reg("rsi"), Reg("rdi"), Reg("r8"), Reg("r9"), Reg("r10"), Reg("r11")])
+                writes.update(caller_saved)
         reads = {x for x in reads if isinstance(x, location)}
         writes = {x for x in writes if isinstance(x, location)}
         return (reads, writes)
@@ -89,6 +129,7 @@ class Compiler:
             if isinstance(p.body[i], Instr) and p.body[i].instr == "movq":
                 live_set.discard(p.body[i].args[0])
             for d in writes:
+                self.interference_graph.add_vertex(d)
                 for v in live_set:
                     if d != v and not self.interference_graph.has_edge(d, v):
                         self.interference_graph.add_edge(d, v)
@@ -297,10 +338,11 @@ class Compiler:
     def assign_homes_arg(self, a: arg, home: dict[Variable, arg]) -> arg:
         if not isinstance(a, Variable):
             return a
-        if not a.id in home.keys():
+        if a not in home:
+            self.log("assigning new home to a variable; probably will be invalid")
             self.var_count += 1
-            home[a.id] = Deref("rbp", -8 * self.var_count)
-        return home[a.id]
+            home[a] = Deref("rbp", -8 * self.var_count)
+        return home[a]
 
     def assign_homes_instr(self, i: instr,
                            home: dict[Variable, arg]) -> instr:
@@ -323,6 +365,74 @@ class Compiler:
             new_body.append(self.assign_homes_instr(ins, home))
         p.body = new_body
         self.log("\nafter assign_homes:")
+        self.log(p)
+        return p
+
+    def colour_interference_graph(self) -> None:
+        self.vertex_colours = {}
+        self.used_callee = set()
+        self.stack_var_count = 0
+        for (key, val) in color_to_register.items():
+            self.vertex_colours[val] = key
+        vars_left = {x for x in self.interference_graph.vertices() if isinstance(x, Variable)}
+        forbidden_colours: dict[Variable, set[int]] = {}
+        for v in vars_left:
+            forbidden_colours[v] = set()
+            neighbours = self.interference_graph.adjacent(v)
+            for n in neighbours:
+                if n in self.vertex_colours.keys():
+                    forbidden_colours[v].add(self.vertex_colours[n])
+            colours_taken = len(forbidden_colours[v])
+        while len(forbidden_colours.items()) > 0:
+            v: Variable
+            max_found = -1
+            for (key, val) in forbidden_colours.items():
+                if len(val) > max_found:
+                    max_found = len(val)
+                    v = key
+            done = False
+            for i in range(self.reg_count):
+                if i not in forbidden_colours[v]:
+                    self.vertex_colours[v] = i
+                    if color_to_register[i] in callee_saved:
+                        self.used_callee.add(color_to_register[i])
+                    done = True
+                    break
+            if not done:
+                i = self.reg_count
+                while i in forbidden_colours[v]:
+                    i += 1
+                self.vertex_colours[v] = i
+                stack_slot_no = i - self.reg_count + 1
+                self.stack_var_count = max(stack_slot_no, self.stack_var_count)
+            forbidden_colours.pop(v)
+            for n in self.interference_graph.adjacent(v):
+                if n in forbidden_colours.keys():
+                    forbidden_colours[n].add(self.vertex_colours[v])
+        self.log(vars_left)
+        self.log("vertex colours:")
+        self.log(self.vertex_colours)
+
+    def allocate_registers(self, p: X86Program) -> X86Program:
+        self.colour_interference_graph()
+        homes = {}
+        program_vars = {x for x in self.interference_graph.vertices() if isinstance(x, Variable)}
+        for v in program_vars:
+            home = None
+            colour = self.vertex_colours[v]
+            if colour < self.reg_count:
+                home = color_to_register[colour]
+            else:
+                stack_slot = colour - self.reg_count + 1
+                home = Deref("rbp", -8 * (len(self.used_callee) + stack_slot))
+            homes[v] = home
+        self.log("homes:")
+        self.log(homes)
+        new_body = []
+        for ins in p.body:
+            new_body.append(self.assign_homes_instr(ins, homes))
+        p.body = new_body
+        self.log("\nafter allocate_registers:")
         self.log(p)
         return p
 
@@ -364,7 +474,38 @@ class Compiler:
     # Prelude & Conclusion
     ############################################################################
 
+    def round_up_to_even(self, num: int) -> int:
+        return num if num % 2 == 0 else num + 1
+
     def prelude_and_conclusion(self, p: X86Program) -> X86Program:
+        callee_used_count = len(self.used_callee)
+        self.log(callee_used_count)
+        self.log(self.stack_var_count)
+        alignment = 8 * (self.round_up_to_even(callee_used_count + self.stack_var_count) - callee_used_count)
+        prelude = [
+            pushreg("rbp"),
+            movq(Reg("rsp"), Reg("rbp")),
+        ]
+        conclusion = [
+            movq(Reg("rbp"), Reg("rsp")),
+            movq(Immediate(0), Reg("rax")),
+            popreg("rbp"),
+            Instr('retq', [])
+        ]
+        for calee in self.used_callee:
+            prelude.append(Instr("pushq", [calee]))
+            conclusion = [Instr("popq", [calee])] + conclusion
+        prelude.append(Instr("subq", [Immediate(alignment), Reg("rsp")]))
+        conclusion = [Instr("addq", [Immediate(alignment), Reg("rsp")])] + conclusion
+        final_instructions = prelude
+        final_instructions.extend(p.body)
+        final_instructions.extend(conclusion)
+        p.body = final_instructions
+        self.log("\nprogram with prelude and conclusion:")
+        self.log(p)
+        return p
+
+    def old_prelude_and_conclusion(self, p: X86Program) -> X86Program:
         stack_size = 8 * (self.var_count if self.var_count % 2 == 0 else self.var_count + 1)
         prelude = [
             pushreg("rbp"),
@@ -403,7 +544,8 @@ class Compiler:
             program = self.select_instructions(simplified_ast)
             self.uncover_live(program)
             self.build_interference_graph(program)
-            program = self.assign_homes(program)
+            program = self.allocate_registers(program)
+            #program = self.assign_homes(program)
             program = self.patch_instructions(program)
             program = self.prelude_and_conclusion(program)
         finally:
@@ -411,11 +553,12 @@ class Compiler:
                 self.log_file.close()
         return program
 
-    def __init__(self, debug=False):
+    def __init__(self, debug=False, registers=AVAILABLE_REG):
         self.var_count = 0
         self.var_suffix = 0
         self.debug = debug
         self.var_current_alias = {}
+        self.reg_count = registers
         if self.debug:
             self.log_file = open(LOG_FILE, "w")
 
@@ -438,12 +581,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input_file")
     parser.add_argument("--debug", type=bool, default=False)
+    parser.add_argument("--registers", type=int, default=AVAILABLE_REG)
     args = parser.parse_args()
     input_file = args.input_file
     debug = args.debug
+    registers = args.registers
     
     source_code = read_input_file(input_file)
-    compiler = Compiler(debug)
+    compiler = Compiler(debug, registers)
     compiled = compiler.compile(source_code)
     print(compiled)
 
