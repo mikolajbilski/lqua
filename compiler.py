@@ -15,6 +15,7 @@ Temporaries = list[Binding]
 class Compiler:
     var_count: int
     var_suffix: int
+    var_current_alias: dict[str, str]
     debug: bool
 
     def _generate_unique_var(self) -> ast.Name:
@@ -28,8 +29,13 @@ class Compiler:
 
     def rco_exp(self, e: expr, need_atomic : bool) -> tuple[expr, Temporaries]:
         match e:
-            case (ast.Constant(value=int()) | Name()) as atm:
+            case (ast.Constant(value=int())) as atm:
                 return (atm, [])
+            case Name() as atm:
+                if str(atm) in self.var_current_alias.keys():
+                    return (self.var_current_alias[str(atm)], [])
+                else:
+                    return (atm, [])
             case ast.Call(
                     func=Name('input_int'),
                     args=[]
@@ -68,7 +74,8 @@ class Compiler:
                 value=exp
             ):
                 simple_exp, temps = self.rco_exp(exp, False)
-                final_stmt = ast.Assign(targets=[target], value=simple_exp)
+                self.var_current_alias[str(target)] = self._generate_unique_var()
+                final_stmt = ast.Assign(targets=[self.var_current_alias[str(target)]], value=simple_exp)
             case ast.Expr(
                 value=ast.Call(
                     func=Name('print'),
@@ -127,21 +134,21 @@ class Compiler:
                 match exp:
                     case (ast.Constant(value=int()) | Name()) as a:
                         a = self.select_arg(a)
-                        instructions.append(movq(a, dest))
+                        instructions.append(movq(a, target))
                     case ast.Call(
                         func=Name('input_int'),
                         args=[]
                     ):
                         instructions.append(Callq("input_int", 0))
+                        instructions.append(movq(dest, target))
                     case ast.BinOp(
                         (ast.Constant(value=int()) | Name()) as a,
-                        (ast.Add() | ast.Sub() | ast.Mult()) as op,
+                        (ast.Add() | ast.Sub()) as op,
                         (ast.Constant(value=int()) | Name()) as b
                     ):
                         a = self.select_arg(a)
                         b = self.select_arg(b)
-                        instructions.append(movq(a, dest))
-                        instructions.append(movq(b, Reg("rcx")))
+                        instructions.append(movq(a, target))
                         ins = ""
                         match op:
                             case ast.Add():
@@ -150,7 +157,27 @@ class Compiler:
                                 ins = "subq"
                             case ast.Mult():
                                 ins = "imulq"
-                        instructions.append(Instr(ins, [Reg("rcx"), dest]))
+                        instructions.append(Instr(ins, [b, target]))
+                    case ast.BinOp(
+                        (ast.Constant(value=int()) | Name()) as a,
+                        (ast.Mult()) as op,
+                        (ast.Constant(value=int())) as b
+                    ):
+                        a = self.select_arg(a)
+                        b = self.select_arg(b)
+                        instructions.append(movq(a, dest))
+                        instructions.append(Instr("imulq", [b, dest, dest]))
+                        instructions.append(movq(dest, target))
+                    case ast.BinOp(
+                        (ast.Constant(value=int()) | Name()) as a,
+                        (ast.Mult()) as op,
+                        (Name()) as b
+                    ):
+                        a = self.select_arg(a)
+                        b = self.select_arg(b)
+                        instructions.append(movq(a, dest))
+                        instructions.append(Instr("imulq", [b, dest]))
+                        instructions.append(movq(dest, target))
                     case ast.BinOp(
                         (ast.Constant(value=int()) | Name()) as a,
                         (ast.FloorDiv() | ast.Mod()) as op,
@@ -159,21 +186,24 @@ class Compiler:
                         a = self.select_arg(a)
                         b = self.select_arg(b)
                         instructions.append(movq(a, dest))
-                        instructions.append(movq(b, Reg("rcx")))
+                        if isinstance(b, Immediate):
+                            temp_var = self.select_arg(self._generate_unique_var())
+                            instructions.append(movq(b, temp_var))
+                            b = temp_var
                         instructions.append(Instr("cqto", []))
-                        instructions.append(Instr("idivq", [Reg("rcx")]))
+                        instructions.append(Instr("idivq", [b]))
                         if isinstance(op, ast.Mod):
                             dest = Reg("rdx")
+                        instructions.append(movq(dest, target))
                     case ast.UnaryOp(
                         ast.USub(),
                         (ast.Constant(value=int()) | Name()) as a
                     ):
                         a = self.select_arg(a)
-                        instructions.append(movq(a, dest))
-                        instructions.append(Instr("negq", [dest]))
+                        instructions.append(movq(a, target))
+                        instructions.append(Instr("negq", [target]))
                     case _:
                         raise SyntaxError(f"Unsupported expression type when processing line: {str(s)}")
-                instructions.append(movq(dest, target))
             case _:
                 raise SyntaxError(f"Unsupported statement type when processing line: {str(s)}")
         return instructions     
@@ -223,12 +253,32 @@ class Compiler:
     ############################################################################
 
     def patch_instr(self, i: instr) -> list[instr]:
-        # YOUR CODE HERE
-        pass        
+        match i:
+            case Instr(
+                instr=("movq" | "addq" | "subq") as instruction,
+                args=(Deref() as arg1, Deref() as arg2)
+            ):
+                instructions = []
+                instructions.append(movq(arg1, Reg("rax")))
+                instructions.append(Instr(instruction, (Reg("rax"), arg2)))
+                return instructions
+            case Instr(
+                instr=("movq" | "addq" | "subq") as instruction,
+                args=(Immediate(value as val) as arg1, arg2)
+            ) if abs(val) >= 1 << 31:
+                instructions = []
+                instructions.append(movq(arg1, Reg("rax")))
+                instructions.append(Instr(instruction, (Reg("rax"), arg2)))
+                return instructions
+            case _:
+                return [i]
+        return [i]
 
     def patch_instructions(self, p: X86Program) -> X86Program:
-        # We made sure all instructions have at least 1 register argument in select_instructions, so we do nothing here
-        return p      
+        program = X86Program(body=[])
+        for s in p.body:
+            program.body.extend(self.patch_instr(s))
+        return program    
 
     ############################################################################
     # Prelude & Conclusion
@@ -292,6 +342,7 @@ class Compiler:
         self.var_count = 0
         self.var_suffix = 0
         self.debug = debug
+        self.var_current_alias = {}
 
 def compile(source_code: str, debug: bool) -> X86Program:
     source_ast = construct_ast(source_code)
