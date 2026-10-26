@@ -168,6 +168,8 @@ class Compiler:
         simplified_ast = ast.Module(body=[], type_ignores=[])
         for s in p.body:
             simplified_ast.body.extend(self.rco_stmt(s))
+        self.log("\nsimplified ast:")
+        self.log(ast.dump(simplified_ast))
         return simplified_ast     
 
     ############################################################################
@@ -284,6 +286,8 @@ class Compiler:
         program = X86Program(body=[])
         for s in p.body:
             program.body.extend(self.select_stmt(s))
+        self.log("\nafter select_instructions:")
+        self.log(program)
         return program
 
     ############################################################################
@@ -318,6 +322,8 @@ class Compiler:
         for ins in p.body:
             new_body.append(self.assign_homes_instr(ins, home))
         p.body = new_body
+        self.log("\nafter assign_homes:")
+        self.log(p)
         return p
 
     ############################################################################
@@ -350,6 +356,8 @@ class Compiler:
         program = X86Program(body=[])
         for s in p.body:
             program.body.extend(self.patch_instr(s))
+        self.log("\nafter patch_instructions:")
+        self.log(program)
         return program    
 
     ############################################################################
@@ -373,6 +381,8 @@ class Compiler:
         final_instructions.extend(p.body)
         final_instructions.extend(conclusion)
         p.body = final_instructions
+        self.log("\nprogram with prelude and conclusion:")
+        self.log(p)
         return p
 
     def log(self, msg: str) -> None:
@@ -390,22 +400,12 @@ class Compiler:
             self.log("\nsource ast:")
             self.log(ast.dump(source_ast))
             simplified_ast = self.remove_complex_operands(source_ast)
-            self.log("\nsimplified ast:")
-            self.log(ast.dump(simplified_ast))
             program = self.select_instructions(simplified_ast)
-            self.log("\nx86var:")
-            self.log(program)
             self.uncover_live(program)
             self.build_interference_graph(program)
             program = self.assign_homes(program)
-            self.log("\nafter assign_homes:")
-            self.log(program)
             program = self.patch_instructions(program)
-            self.log("\nafter patch_instructions:")
-            self.log(program)
             program = self.prelude_and_conclusion(program)
-            self.log("\nfinal program:")
-            self.log(program)
         finally:
             if self.debug:
                 self.log_file.close()
