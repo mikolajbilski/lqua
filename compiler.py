@@ -3,18 +3,20 @@
 import ast
 from ast import (expr, stmt, Module, Name)
 from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg)
-import os
 import sys
+import argparse
+
+LOG_FILE = "compiler.log"
 
 Binding = tuple[Name, expr]
 Temporaries = list[Binding]
 
 
 class Compiler:
-    var_count = 0
+    var_count: int
+    var_suffix: int
+    debug: bool
 
-
-    var_suffix = 0
     def _generate_unique_var(self) -> ast.Name:
         name = "x_" + str(self.var_suffix)
         self.var_suffix += 1
@@ -251,7 +253,48 @@ class Compiler:
         p.body = final_instructions
         return p
 
-def compile(source_ast: Module) -> X86Program:
+    def log(self, msg: str) -> None:
+        if not self.debug:
+            return
+        print(msg, file=self.log_file)
+
+    def compile(self, source_code: str) -> X86Program:
+        log_file = None
+        if self.debug:
+            self.log_file = open(LOG_FILE, "w")
+            self.log("source code:")
+            self.log(source_code)
+        try:
+            source_ast = construct_ast(source_code)
+            self.log("\nsource ast:")
+            self.log(ast.dump(source_ast))
+            simplified_ast = self.remove_complex_operands(source_ast)
+            self.log("\nsimplified ast:")
+            self.log(ast.dump(simplified_ast))
+            program = self.select_instructions(simplified_ast)
+            self.log("\nx86var:")
+            self.log(program)
+            program = self.assign_homes(program)
+            self.log("\nafter assign_homes:")
+            self.log(program)
+            program = self.patch_instructions(program)
+            self.log("\nafter patch_instructions:")
+            self.log(program)
+            program = self.prelude_and_conclusion(program)
+            self.log("\nfinal program:")
+            self.log(program)
+        finally:
+            if self.debug:
+                self.log_file.close()
+        return program
+
+    def __init__(self, debug=False):
+        self.var_count = 0
+        self.var_suffix = 0
+        self.debug = debug
+
+def compile(source_code: str, debug: bool) -> X86Program:
+    source_ast = construct_ast(source_code)
     compiler = Compiler()
     simplified_ast = compiler.remove_complex_operands(source_ast)
     program = compiler.select_instructions(simplified_ast)
@@ -272,13 +315,20 @@ def read_input_file(path: str) -> str:
         exit(1)
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <input_file>")
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <input_file> [compiler_options]")
         exit(1)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_file")
+    parser.add_argument("--debug", type=bool, default=False)
+    args = parser.parse_args()
+    input_file = args.input_file
+    debug = args.debug
     
-    source_code = read_input_file(sys.argv[1])
-    ast = construct_ast(source_code)
-    compiled = compile(ast)
+    source_code = read_input_file(input_file)
+    compiler = Compiler(debug)
+    compiled = compiler.compile(source_code)
     print(compiled)
 
 if __name__ == "__main__":

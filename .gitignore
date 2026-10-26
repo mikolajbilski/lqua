@@ -12,3 +12,4 @@ wheels/
 # Temporary files
 tmp/
 out/
+compiler.log
