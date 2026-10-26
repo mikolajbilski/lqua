@@ -1,7 +1,6 @@
 from pathlib import Path
 from enum import Enum
 import subprocess
-import os
 import colorama
 import shutil
 
