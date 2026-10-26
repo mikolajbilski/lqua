@@ -3,6 +3,7 @@
 import ast
 from ast import (expr, stmt, Module, Name)
 from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location)
+from graph import UndirectedAdjList
 import sys
 import argparse
 
@@ -17,7 +18,9 @@ class Compiler:
     var_suffix: int
     var_current_alias: dict[str, str]
     debug: bool
-    live_after = dict[int, set[location]]
+    live_after: dict[int, set[location]]
+    write_set: dict[int, set[location]]
+    interference_graph: UndirectedAdjList
 
     def _generate_unique_var(self) -> ast.Name:
         name = "x_" + str(self.var_suffix)
@@ -70,10 +73,27 @@ class Compiler:
 
     def uncover_live(self, p: X86Program) -> None:
         self.live_after = {len(p.body) - 1: set()}
+        self.write_set = {}
         for i in reversed(range(len(p.body))):
             reads, writes = self.get_reads_writes(p.body[i])
             self.live_after[i-1] = (self.live_after[i] - writes) | reads
+            self.write_set[i] = writes.copy()
+        self.log("live-after set:")
         self.log(self.live_after)
+
+    def build_interference_graph(self, p: X86Program) -> None:
+        self.interference_graph = UndirectedAdjList()
+        for i in range(len(p.body)):
+            writes = self.write_set[i]
+            live_set = self.live_after[i].copy()
+            if isinstance(p.body[i], Instr) and p.body[i].instr == "movq":
+                live_set.discard(p.body[i].args[0])
+            for d in writes:
+                for v in live_set:
+                    if d != v and not self.interference_graph.has_edge(d, v):
+                        self.interference_graph.add_edge(d, v)
+        self.log("interference graph edges:")
+        self.log(self.interference_graph.edges())
 
     ############################################################################
     # Remove Complex Operands
@@ -363,7 +383,6 @@ class Compiler:
     def compile(self, source_code: str) -> X86Program:
         log_file = None
         if self.debug:
-            self.log_file = open(LOG_FILE, "w")
             self.log("source code:")
             self.log(source_code)
         try:
@@ -377,6 +396,7 @@ class Compiler:
             self.log("\nx86var:")
             self.log(program)
             self.uncover_live(program)
+            self.build_interference_graph(program)
             program = self.assign_homes(program)
             self.log("\nafter assign_homes:")
             self.log(program)
@@ -396,16 +416,8 @@ class Compiler:
         self.var_suffix = 0
         self.debug = debug
         self.var_current_alias = {}
-
-def compile(source_code: str, debug: bool) -> X86Program:
-    source_ast = construct_ast(source_code)
-    compiler = Compiler()
-    simplified_ast = compiler.remove_complex_operands(source_ast)
-    program = compiler.select_instructions(simplified_ast)
-    program = compiler.assign_homes(program)
-    program = compiler.patch_instructions(program)
-    program = compiler.prelude_and_conclusion(program)
-    return program
+        if self.debug:
+            self.log_file = open(LOG_FILE, "w")
 
 def construct_ast(source_code: str) -> Module:
     return ast.parse(source_code)
