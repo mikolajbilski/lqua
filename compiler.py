@@ -2,7 +2,7 @@
 # See EOC-LICENSE for details
 import ast
 from ast import (expr, stmt, Module, Name)
-from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg)
+from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location)
 import sys
 import argparse
 
@@ -17,11 +17,63 @@ class Compiler:
     var_suffix: int
     var_current_alias: dict[str, str]
     debug: bool
+    live_after = dict[int, set[location]]
 
     def _generate_unique_var(self) -> ast.Name:
         name = "x_" + str(self.var_suffix)
         self.var_suffix += 1
         return ast.Name(name)
+
+    def get_reads_writes(self, i: instr) -> tuple[set[location], set[location]]:
+        reads = set()
+        writes = set()
+        match i:
+            case Instr(
+                instr=("movq"),
+                args=(arg() as s, arg() as d)
+            ):
+                reads.update([s])
+                writes.update([d])
+            case Instr(
+                instr=("addq" | "subq" | "imulq"),
+                args=(arg() as s, arg() as d)
+            ):
+                reads.update([s, d])
+                writes.update([d])
+            case Instr(
+                instr=("negq"),
+                args=(arg() as d)
+            ):
+                reads.update([d])
+                writes.update([d])
+            case Instr(
+                instr=("imulq"),
+                args=(arg(), arg() as s, arg() as d)
+            ):
+                reads.update([s])
+                writes.update([d])
+            case Instr(
+                instr=("idivq"),
+                args=(arg() as x)
+            ):
+                reads.update([x, Reg("rax"), Reg("rdx")])
+                writes.update([Reg("rax"), Reg("rdx")])
+            case Callq(
+                num_args=args
+            ):
+                arg_regs = [Reg("rdi"), Reg("rsi"), Reg("rdx"), Reg("rcx"), Reg("r8"), Reg("r9")]
+                reads.update(arg_regs[:args])
+                writes.update([Reg("rax"), Reg("rcx"), Reg("rdx"), Reg("rsi"), Reg("rdi"), Reg("r8"), Reg("r9"), Reg("r10"), Reg("r11")])
+        reads = {x for x in reads if isinstance(x, location)}
+        writes = {x for x in writes if isinstance(x, location)}
+        return (reads, writes)
+
+    def uncover_live(self, p: X86Program) -> None:
+        self.live_after = {len(p.body) - 1: set()}
+        for i in reversed(range(len(p.body))):
+            reads, writes = self.get_reads_writes(p.body[i])
+            self.live_after[i-1] = (self.live_after[i] - writes) | reads
+        self.log(self.live_after)
 
     ############################################################################
     # Remove Complex Operands
@@ -324,6 +376,7 @@ class Compiler:
             program = self.select_instructions(simplified_ast)
             self.log("\nx86var:")
             self.log(program)
+            self.uncover_live(program)
             program = self.assign_homes(program)
             self.log("\nafter assign_homes:")
             self.log(program)
