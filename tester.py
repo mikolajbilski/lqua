@@ -3,6 +3,7 @@ from enum import Enum
 import subprocess
 import colorama
 import shutil
+import sys
 
 ROOT = Path(__file__).resolve().parent
 TEST_FOLDER = ROOT / "tests"
@@ -39,7 +40,7 @@ def run_test(input_file: Path) -> TestResult:
     try:
         with open(COMPOUT, "w") as f:
             result = subprocess.run(
-                ["uv", "run", str(PROGRAM), str(input_file)],
+                ["uv", "run", str(PROGRAM), str(input_file)] + sys.argv[2:],
                 cwd=ROOT,
                 timeout=30,
                 stdout=f
