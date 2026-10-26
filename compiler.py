@@ -442,6 +442,8 @@ class Compiler:
 
     def patch_instr(self, i: instr) -> list[instr]:
         match i:
+            case Instr(instr="movq", args=(arg1, arg2)) if arg1 == arg2:
+                return []
             case Instr(
                 instr=("movq" | "addq" | "subq") as instruction,
                 args=(Deref() as arg1, Deref() as arg2)
