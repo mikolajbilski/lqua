@@ -497,8 +497,9 @@ class Compiler:
         for calee in self.used_callee:
             prelude.append(Instr("pushq", [calee]))
             conclusion = [Instr("popq", [calee])] + conclusion
-        prelude.append(Instr("subq", [Immediate(alignment), Reg("rsp")]))
-        conclusion = [Instr("addq", [Immediate(alignment), Reg("rsp")])] + conclusion
+        if alignment > 0:
+            prelude.append(Instr("subq", [Immediate(alignment), Reg("rsp")]))
+            conclusion = [Instr("addq", [Immediate(alignment), Reg("rsp")])] + conclusion
         final_instructions = prelude
         final_instructions.extend(p.body)
         final_instructions.extend(conclusion)
