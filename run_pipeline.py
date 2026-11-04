@@ -86,6 +86,7 @@ def compile_and_run(input_file: Path, compiler_opts: list[str]) -> TestResult:
 def main():
     if len(sys.argv) < 2:
         print(f"usage: {sys.argv[0]} <input_file> [compiler_options]")
+        exit(1)
     test_path = ROOT / sys.argv[1]
     OUT.mkdir(parents=True, exist_ok=True)
     result = compile_and_run(test_path, sys.argv[2:])
