@@ -136,6 +136,55 @@ class Compiler:
         self.log("interference graph edges:")
         self.log(self.interference_graph.edges())
 
+    def shrink_exp(self, e: expr) -> expr:
+        match e:
+            case ast.Constant() | Name() | ast.Call(func=Name('input_int'), args=[]):
+                return e
+            case ast.BinOp(a, op, b):
+                return ast.BinOp(self.shrink_exp(a), op, self.shrink_exp(b))
+            case ast.UnaryOp(op, a):
+                return ast.UnaryOp(op, self.shrink_exp(a))
+            case ast.Compare(left, [op], [right]):
+                return ast.Compare(self.shrink_exp(left), [op], [self.shrink_exp(right)])
+            case ast.IfExp(test, body, orelse):
+                return ast.IfExp(self.shrink_exp(test), self.shrink_exp(body), self.shrink_exp(orelse))
+            case ast.BoolOp(ast.And(), values):
+                shrunk = [self.shrink_exp(v) for v in values]
+                result = shrunk[-1]
+                for v in reversed(shrunk[:-1]):
+                    result = ast.IfExp(v, result, ast.Constant(False))
+                return result
+            case ast.BoolOp(ast.Or(), values):
+                shrunk = [self.shrink_exp(v) for v in values]
+                result = shrunk[-1]
+                for v in reversed(shrunk[:-1]):
+                    result = ast.IfExp(v, ast.Constant(True), result)
+                return result
+            case _:
+                raise SyntaxError(f"Unsupported expression type in shrink: {e}")
+
+    def shrink_stmt(self, s: stmt) -> stmt:
+        match s:
+            case ast.Assign(targets=[Name() as target], value=exp):
+                return ast.Assign(targets=[target], value=self.shrink_exp(exp))
+            case ast.Expr(value=ast.Call(func=Name('print'), args=[exp])):
+                return ast.Expr(ast.Call(func=Name('print'), args=[self.shrink_exp(exp)]))
+            case ast.If(test, body, orelse):
+                return ast.If(self.shrink_exp(test),
+                              [self.shrink_stmt(s) for s in body],
+                              [self.shrink_stmt(s) for s in orelse]
+                              )
+            case _:
+                raise SyntaxError(f"Unsupported statement type in shrink: {s}")
+
+    def shrink(self, p: Module) -> Module:
+        shrunk = ast.Module(body=[], type_ignores=[])
+        for s in p.body:
+            shrunk.body.append(self.shrink_stmt(s))
+        self.log("\nshrunk ast:")
+        self.log(ast.dump(shrunk))
+        return shrunk
+
     ############################################################################
     # Remove Complex Operands
     ############################################################################
@@ -543,7 +592,8 @@ class Compiler:
             source_ast = construct_ast(source_code)
             self.log("\nsource ast:")
             self.log(ast.dump(source_ast))
-            simplified_ast = self.remove_complex_operands(source_ast)
+            shrunk_ast = self.shrink(source_ast)
+            simplified_ast = self.remove_complex_operands(shrunk_ast)
             program = self.select_instructions(simplified_ast)
             self.uncover_live(program)
             self.build_interference_graph(program)
