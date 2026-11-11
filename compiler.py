@@ -136,6 +136,23 @@ class Compiler:
         self.log("interference graph edges:")
         self.log(self.interference_graph.edges())
 
+    def eval_comparison(self, cmp: ast.cmpop, left: int, right: int) -> bool:
+        match cmp:
+            case ast.Eq():
+                return left == right
+            case ast.NotEq():
+                return left != right
+            case ast.Lt():
+                return left <  right
+            case ast.LtE():
+                return left <= right
+            case ast.Gt():
+                return left >  right
+            case ast.GtE():
+                return left >= right
+            case _:
+                raise SyntaxError(f"Unsupported comparison operator: {cmp}")
+
     def shrink_exp(self, e: expr) -> expr:
         match e:
             case ast.Constant() | Name() | ast.Call(func=Name('input_int'), args=[]):
@@ -145,7 +162,11 @@ class Compiler:
             case ast.UnaryOp(op, a):
                 return ast.UnaryOp(op, self.shrink_exp(a))
             case ast.Compare(left, [op], [right]):
-                return ast.Compare(self.shrink_exp(left), [op], [self.shrink_exp(right)])
+                left_shrunk = self.shrink_exp(left)
+                right_shrunk = self.shrink_exp(right)
+                if isinstance(left_shrunk, ast.Constant) and isinstance(right_shrunk, ast.Constant):
+                    return ast.Constant(self.eval_comparison(op, left_shrunk.value, right_shrunk.value))
+                return ast.Compare(left_shrunk, [op], [right_shrunk])
             case ast.IfExp(test, body, orelse):
                 return ast.IfExp(self.shrink_exp(test), self.shrink_exp(body), self.shrink_exp(orelse))
             case ast.BoolOp(ast.And(), values):
