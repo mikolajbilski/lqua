@@ -3,6 +3,7 @@
 import ast
 from ast import (expr, stmt, Module, Name)
 from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location)
+from cif import Begin
 from graph import UndirectedAdjList
 import sys
 import argparse
@@ -210,6 +211,12 @@ class Compiler:
     # Remove Complex Operands
     ############################################################################
 
+    def bind_temps(self, tmps: Temporaries, atom: expr) -> expr:
+        if not tmps:
+            return atom
+        body = [ast.Assign(targets=[name], value=val) for (name, val) in tmps]
+        return Begin(body, atom)
+
     def rco_exp(self, e: expr, need_atomic : bool) -> tuple[expr, Temporaries]:
         match e:
             case (ast.Constant(value=int())) as atm:
@@ -237,6 +244,14 @@ class Compiler:
                     return (t, tmps_a + tmps_b + [(t, e)])
                 else:
                     return (e, tmps_a + tmps_b)
+            case ast.UnaryOp(ast.Not(), ast.Compare(left, [op], [right]) as cmp):
+                cmp2, tmps = self.rco_exp(cmp, False)
+                e = ast.UnaryOp(ast.Not(), cmp2)
+                if need_atomic:
+                    t = self._generate_unique_var()
+                    return (t, tmps + [(t, e)])
+                else:
+                    return (e, tmps)
             case ast.UnaryOp(op, a):
                 a2, tmps_a = self.rco_exp(a, True)
                 e = ast.UnaryOp(op, a2)
@@ -245,6 +260,27 @@ class Compiler:
                     return (t, tmps_a + [(t, e)])
                 else:
                     return (e, tmps_a)
+            case ast.Compare(left, [op], [right]):
+                left2, tmps_l = self.rco_exp(left, True)
+                right2, tmps_l = self.rco_exp(right, True)
+                e = ast.Compare(left2, [op], right2)
+                if need_atomic:
+                    t = self._generate_unique_var()
+                    return (t, tmps + [(t, e)])
+                else:
+                    return (e, tmps)
+            case ast.IfExp(test, body, orelse):
+                test2, test_tmps = self.rco_exp(test, False)
+                body2, body_tmps = self.rco_exp(body, False)
+                orelse2, orelse_tmps = self.rco_exp(orelse, False)
+                body2 = self.bind_temps(body_tmps, body2)
+                orelse2 = self.bind_temps(orelse_tmps, orelse2)
+                e = ast.IfExp(test2, body2, orelse2)
+                if need_atomic:
+                    t = self._generate_unique_var()
+                    return (t, test_tmps + [(t, e)])
+                else:
+                    return (e, test_tmps)
             case _:
                 raise SyntaxError(f"Unsupported expression type when processing line: {e}")
 
@@ -267,6 +303,12 @@ class Compiler:
             ):
                 simple_exp, temps = self.rco_exp(exp, True)
                 final_stmt = ast.Expr(ast.Call(func=Name('print'), args=[simple_exp]))
+            case ast.If(test, body, orelse):
+                test2, test_tmps = self.rco_exp(test, False)
+                test_stmts = [ast.Assign(targets=[name], value=val) for (name, val) in test_tmps]
+                body2 = self.rco_stmts(body)
+                orelse2 = self.rco_stmts(orelse)
+                return test_stmts + [ast.If(test2, body2, orelse2)]
             case _:
                 raise SyntaxError(f"Unsupported statement type when processing line: {s}")
         simple_stmts = []
@@ -275,10 +317,14 @@ class Compiler:
         simple_stmts.append(final_stmt)
         return simple_stmts
 
+    def rco_stmts(self, stmts: list[stmt]) -> list[stmt]:
+        result = []
+        for s in stmts:
+            result.extend(self.rco_stmt(s))
+        return result
+
     def remove_complex_operands(self, p: Module) -> Module:
-        simplified_ast = ast.Module(body=[], type_ignores=[])
-        for s in p.body:
-            simplified_ast.body.extend(self.rco_stmt(s))
+        simplified_ast = ast.Module(body=self.rco_stmts(p.body), type_ignores=[])
         self.log("\nsimplified ast:")
         self.log(ast.dump(simplified_ast))
         return simplified_ast     
