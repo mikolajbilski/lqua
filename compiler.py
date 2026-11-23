@@ -2,7 +2,7 @@
 # See EOC-LICENSE for details
 import ast
 from ast import (expr, stmt, Module, Name)
-from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location)
+from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location, ByteReg)
 from cif import Begin, Goto, CProgram
 from graph import UndirectedAdjList
 import sys
@@ -454,6 +454,50 @@ class Compiler:
                 return Variable(var)
             case _:
                 raise SyntaxError(f"Expected atom, got: {e}")
+
+    def cmp_to_cc(self, cmp: ast.cmpop) -> str:
+        match cmp:
+            case ast.Eq():
+                return "e"
+            case ast.NotEq():
+                return "ne"
+            case ast.Lt():
+                return "l"
+            case ast.LtE():
+                return "le"
+            case ast.Gt():
+                return "g"
+            case ast.GtE():
+                return "ge"
+            case _:
+                raise SyntaxError(f"Unsupported comparison operator: {cmp}")
+
+    def negate_cmp(self, cmp: ast.cmpop) -> ast.cmpop:
+        match cmp:
+            case ast.Eq():
+                return ast.NotEq()
+            case ast.NotEq():
+                return ast.Eq()
+            case ast.Lt():
+                return ast.GtE()
+            case ast.GtE():
+                return ast.Lt()
+            case ast.Gt():
+                return ast.LtE()
+            case ast.LtE():
+                return ast.Gt()
+            case _:
+                raise SyntaxError(f"Unsupported comparison operator: {cmp}")
+
+    def select_compare(self, target: arg, cmp: ast.cmpop, left: expr, right: expr) -> list[instr]:
+        left_a = self.select_arg(left)
+        right_a = self.select_arg(right)
+        al = ByteReg("al")
+        return [
+            Instr("cmpq", [right_a, left_a]),
+            Instr("set" + self.cmp_to_cc(cmp), [al]),
+            Instr("movzbq", [al, target]),
+        ]
 
     def select_stmt(self, s: stmt) -> list[instr]:
         instructions = []
