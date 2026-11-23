@@ -269,13 +269,13 @@ class Compiler:
                     return (e, tmps_a)
             case ast.Compare(left, [op], [right]):
                 left2, tmps_l = self.rco_exp(left, True)
-                right2, tmps_l = self.rco_exp(right, True)
-                e = ast.Compare(left2, [op], right2)
+                right2, tmps_r = self.rco_exp(right, True)
+                e = ast.Compare(left2, [op], [right2])
                 if need_atomic:
                     t = self._generate_unique_var()
-                    return (t, tmps + [(t, e)])
+                    return (t, tmps_l + tmps_r + [(t, e)])
                 else:
-                    return (e, tmps)
+                    return (e, tmps_l + tmps_r)
             case ast.IfExp(test, body, orelse):
                 test2, test_tmps = self.rco_exp(test, False)
                 body2, body_tmps = self.rco_exp(body, False)
@@ -334,7 +334,7 @@ class Compiler:
         simplified_ast = ast.Module(body=self.rco_stmts(p.body), type_ignores=[])
         self.log("\nsimplified ast:")
         self.log(ast.dump(simplified_ast))
-        return simplified_ast     
+        return simplified_ast
 
     def create_block(self, stmts: list[stmt],
                      basic_blocks: dict[str, list[stmt]]) -> list[stmt]:
