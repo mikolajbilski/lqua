@@ -3,7 +3,7 @@
 import ast
 from ast import (expr, stmt, Module, Name)
 from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location)
-from cif import Begin
+from cif import Begin, Goto, CProgram
 from graph import UndirectedAdjList
 import sys
 import argparse
@@ -47,6 +47,7 @@ Temporaries = list[Binding]
 class Compiler:
     var_count: int
     var_suffix: int
+    block_suffix: int
     var_current_alias: dict[str, str]
     debug: bool
     reg_count: int
@@ -56,11 +57,17 @@ class Compiler:
     vertex_colours: dict[location, int]
     used_callee: set[Reg]
     stack_var_count: int
+    basic_blocks: dict[str, list[stmt]]
 
     def _generate_unique_var(self) -> ast.Name:
         name = "x_" + str(self.var_suffix)
         self.var_suffix += 1
         return ast.Name(name)
+
+    def _generate_block_name(self) -> str:
+        name = "block_" + str(self.block_suffix)
+        self.block_suffix += 1
+        return name
 
     def get_reads_writes(self, i: instr) -> tuple[set[location], set[location]]:
         reads = set()
@@ -328,6 +335,110 @@ class Compiler:
         self.log("\nsimplified ast:")
         self.log(ast.dump(simplified_ast))
         return simplified_ast     
+
+    def create_block(self, stmts: list[stmt],
+                     basic_blocks: dict[str, list[stmt]]) -> list[stmt]:
+        match stmts:
+            case [Goto(_)]:
+                return stmts
+            case _:
+                name = self._generate_block_name()
+                basic_blocks[name] = stmts
+                return [Goto(name)]
+
+    def explicate_effect(self, e: expr, cont: list[stmt],
+                         basic_blocks: dict[str, list[stmt]]) -> list[stmt]:
+        match e:
+            case Begin(body, result):
+                cont2 = self.explicate_effect(result, cont, basic_blocks)
+                return self.explicate_stmts(body, cont2, basic_blocks)
+            case ast.Call(func=Name('input_int', args=[])):
+                return [ast.Expr(e)] + cont
+            case ast.IfExp(test, body, orelse):
+                goto_cont = self.create_block(cont, basic_blocks)
+                body2 = self.explicate_effect(body, goto_cont, basic_blocks)
+                orelse2 = self.explicate_effect(orelse, goto_cont, basic_blocks)
+                return self.explicate_pred(test, body2, orelse2, basic_blocks)
+            case _:
+                return cont
+
+    def explicate_assign(self, rhs: expr, lhs: expr, cont: list[stmt],
+                         basic_blocks: dict[str, list[stmt]]) -> list[stmt]:
+        match rhs:
+            case Begin(body, result):
+                cont2 = self.explicate_assign(result, lhs, cont, basic_blocks)
+                return self.explicate_stmts(body, cont2, basic_blocks)
+            case ast.IfExp(test, body, orelse):
+                goto_cont = self.create_block(cont, basic_blocks)
+                then_branch = self.explicate_assign(body, lhs, goto_cont, basic_blocks)
+                else_branch = self.explicate_assign(orelse, lhs, goto_cont, basic_blocks)
+                return self.explicate_pred(test, then_branch, else_branch, basic_blocks)
+            case _:
+                return [ast.Assign(targets=[lhs], value=rhs)] + cont
+
+    def explicate_stmt(self, s: stmt, cont: list[stmt],
+                       basic_blocks: dict[str, list[stmt]]) -> list[stmt]:
+        match s:
+            case ast.Assign(targets=[lhs], value=rhs):
+                return self.explicate_assign(rhs, lhs, cont, basic_blocks)
+            case ast.Expr(value=ast.Call(func=Name('print'), args=[atm])):
+                return [ast.Expr(ast.Call(func=Name('print'), args=[atm]))] + cont
+            case ast.Expr(value=e):
+                return self.explicate_effect(e, cont, basic_blocks)
+            case ast.If(test, body, orelse):
+                goto_cont = self.create_block(cont, basic_blocks)
+                body2 = self.explicate_stmts(body, goto_cont, basic_blocks)
+                orelse2 = self.explicate_stmts(orelse, goto_cont, basic_blocks)
+                return self.explicate_pred(test, body2, orelse2, basic_blocks)
+            case _:
+                raise SyntaxError(f"Unsupported statement type in explicate_stmt: {s}")
+
+    def explicate_stmts(self, stmts: list[stmt], cont: list[stmt],
+                        basic_blocks: dict[str, list[stmt]]) -> list[stmt]:
+        for s in reversed(stmts):
+            cont = self.explicate_stmt(s, cont, basic_blocks)
+        return cont
+
+    def explicate_pred(self, cond: expr, then: list[stmt], els: list[stmt],
+                       basic_blocks: dict[str, list[stmt]]) -> list[stmt]:
+        match cond:
+            case ast.Compare(left, [cmpop], [right]):
+                goto_then = self.create_block(then, basic_blocks)
+                goto_els = self.create_block(els, basic_blocks)
+                return [ast.If(cond, goto_then, goto_els)]
+            case ast.Constant(True):
+                return then
+            case ast.Constant(False):
+                return els
+            case ast.UnaryOp(ast.Not(), operand):
+                return self.explicate_pred(operand, els, then, basic_blocks)
+            case ast.IfExp(test, body, orelse):
+                goto_els = self.create_block(els, basic_blocks)
+                goto_then = self.create_block(then, basic_blocks)
+                body_branch = self.explicate_pred(body, goto_then, goto_els, basic_blocks)
+                orelse_branch = self.explicate_pred(orelse, goto_then, goto_els, basic_blocks)
+                return self.explicate_pred(test, body_branch, orelse_branch, basic_blocks)
+            case Begin(body, result):
+                result2 = self.explicate_pred(result, then, els, basic_blocks)
+                return self.explicate_stmts(body, result2, basic_blocks)
+            case Name() | ast.Constant():
+                return [ast.If(ast.Compare(cond, [ast.Eq()], [ast.Constant(False)]),
+                                self.create_block(els, basic_blocks),
+                                self.create_block(then, basic_blocks))]
+            case _:
+                temp = self._generate_unique_var()
+                return [ast.Assign(targets=[temp], value=cond)] + \
+                    self.explicate_pred(temp, then, els, basic_blocks)
+
+    def explicate_control(self, p: Module) -> CProgram:
+        basic_blocks: dict[str, list[stmt]] = {}
+        cont = self.explicate_stmts(p.body, [ast.Return(ast.Constant(0))], basic_blocks)
+        basic_blocks['main_start'] = cont
+        self.basic_blocks = basic_blocks
+        prog = CProgram(body=basic_blocks)
+        self.log("\nexplicated blocks:")
+        self.log(prog)
+        return prog
 
     ############################################################################
     # Select Instructions
@@ -676,6 +787,7 @@ class Compiler:
     def __init__(self, debug=False, registers=AVAILABLE_REG):
         self.var_count = 0
         self.var_suffix = 0
+        self.block_suffix = 0
         self.debug = debug
         self.var_current_alias = {}
         self.reg_count = registers
