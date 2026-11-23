@@ -109,6 +109,28 @@ class Compiler:
             ):
                 reads.update([Reg("rax")])
                 writes.update([Reg("rax"), Reg("rdx")])
+            case Instr(
+                instr=("cmpq"),
+                args=(arg() as s1, arg() as s2)
+            ):
+                reads.update([s1, s2])
+            case Instr(
+                instr=("xorq"),
+                args=(arg() as s, arg() as d)
+            ):
+                reads.update([s, d])
+                writes.update([d])
+            case Instr(
+                instr=("movzbq"),
+                args=(arg(), arg() as d)
+            ):
+                reads.update([Reg("rax")])
+                writes.update([d])
+            case Instr(
+                instr=name,
+                args=(arg(),)
+            ) if isinstance(name, str) and name.startswith("set"):
+                writes.update([Reg("rax")])
             case Callq(
                 num_args=args
             ):
