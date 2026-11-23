@@ -48,7 +48,6 @@ class Compiler:
     var_count: int
     var_suffix: int
     block_suffix: int
-    var_current_alias: dict[str, str]
     debug: bool
     reg_count: int
     live_after: dict[int, set[location]]
@@ -251,10 +250,7 @@ class Compiler:
             case (ast.Constant(value=int())) as atm:
                 return (atm, [])
             case Name() as atm:
-                if str(atm) in self.var_current_alias.keys():
-                    return (self.var_current_alias[str(atm)], [])
-                else:
-                    return (atm, [])
+                return (atm, [])
             case ast.Call(
                     func=Name('input_int'),
                     args=[]
@@ -322,8 +318,7 @@ class Compiler:
                 value=exp
             ):
                 simple_exp, temps = self.rco_exp(exp, False)
-                self.var_current_alias[str(target)] = self._generate_unique_var()
-                final_stmt = ast.Assign(targets=[self.var_current_alias[str(target)]], value=simple_exp)
+                final_stmt = ast.Assign(targets=[target], value=simple_exp)
             case ast.Expr(
                 value=ast.Call(
                     func=Name('print'),
@@ -556,16 +551,20 @@ class Compiler:
                     ):
                         a = self.select_arg(a)
                         b = self.select_arg(b)
-                        instructions.append(movq(a, target))
-                        ins = ""
-                        match op:
-                            case ast.Add():
-                                ins = "addq"
-                            case ast.Sub():
-                                ins = "subq"
-                            case ast.Mult():
-                                ins = "imulq"
-                        instructions.append(Instr(ins, [b, target]))
+                        if isinstance(op, ast.Add):
+                            if b == target:
+                                instructions.append(Instr("addq", [a, b]))
+                            else:
+                                instructions.append(movq(a, target))
+                                instructions.append(Instr("addq", [b, target]))
+                        else:
+                            if b == target:
+                                instructions.append(movq(a, dest))
+                                instructions.append(Instr("subq", [b, dest]))
+                                instructions.append(movq(dest, target))
+                            else:
+                                instructions.append(movq(a, target))
+                                instructions.append(Instr("subq", [b, target]))
                     case ast.BinOp(
                         (ast.Constant(value=int()) | Name()) as a,
                         (ast.Mult()) as op,
@@ -614,7 +613,7 @@ class Compiler:
                         raise SyntaxError(f"Unsupported expression type when processing line: {str(s)}")
             case _:
                 raise SyntaxError(f"Unsupported statement type when processing line: {str(s)}")
-        return instructions     
+        return instructions
 
     def select_instructions(self, p: Module) -> X86Program:
         program = X86Program(body=[])
@@ -855,7 +854,6 @@ class Compiler:
         self.var_suffix = 0
         self.block_suffix = 0
         self.debug = debug
-        self.var_current_alias = {}
         self.reg_count = registers
         if self.debug:
             self.log_file = open(LOG_FILE, "w")
