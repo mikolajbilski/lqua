@@ -696,6 +696,19 @@ class Compiler:
         self.log(p)
         return p
 
+    def assign_homes_multiblock(self, p: X86Program) -> X86Program:
+        home: dict[Variable, arg] = {}
+        self.var_count = 0
+        self.used_callee = set()
+        new_body = {}
+        for label, block in p.body.items():
+            new_body[label] = [self.assign_homes_instr(ins, home) for ins in block]
+        p.body = new_body
+        self.stack_var_count = self.var_count
+        self.log("\nafter assign_homes_multiblock:")
+        self.log(p)
+        return p
+
     def colour_interference_graph(self) -> None:
         self.vertex_colours = {}
         self.used_callee = set()
@@ -773,7 +786,7 @@ class Compiler:
             case Instr(instr="movq", args=(arg1, arg2)) if arg1 == arg2:
                 return []
             case Instr(
-                instr=("movq" | "addq" | "subq") as instruction,
+                instr=("movq" | "addq" | "subq" | "cmpq") as instruction,
                 args=(Deref() as arg1, Deref() as arg2)
             ):
                 instructions = []
@@ -781,24 +794,31 @@ class Compiler:
                 instructions.append(Instr(instruction, (Reg("rax"), arg2)))
                 return instructions
             case Instr(
-                instr=("movq" | "addq" | "subq") as instruction,
+                instr=("movq" | "addq" | "subq" | "cmpq") as instruction,
                 args=(Immediate(value as val) as arg1, arg2)
             ) if abs(val) >= 1 << 31:
                 instructions = []
                 instructions.append(movq(arg1, Reg("rax")))
                 instructions.append(Instr(instruction, (Reg("rax"), arg2)))
                 return instructions
+            case Instr(instr="cmpq", args=(arg1, Immediate() as arg2)):
+                return [movq(arg2, Reg("rax")), Instr("cmpq", [arg1, Reg("rax")])]
+            case Instr(instr="movzbq", args=(arg1, Deref() as arg2)):
+                return [Instr("movzbq", [arg1, Reg("rax")]), movq(Reg("rax"), arg2)]
             case _:
                 return [i]
-        return [i]
 
     def patch_instructions(self, p: X86Program) -> X86Program:
-        program = X86Program(body=[])
-        for s in p.body:
-            program.body.extend(self.patch_instr(s))
+        new_body = {}
+        for label, block in p.body.items():
+            instructions = []
+            for s in block:
+                instructions.extend(self.patch_instr(s))
+            new_body[label] = instructions
+        p.body = new_body
         self.log("\nafter patch_instructions:")
-        self.log(program)
-        return program    
+        self.log(p)
+        return p
 
     ############################################################################
     # Prelude & Conclusion
@@ -818,7 +838,6 @@ class Compiler:
         ]
         conclusion = [
             movq(Reg("rbp"), Reg("rsp")),
-            movq(Immediate(0), Reg("rax")),
             popreg("rbp"),
             Instr('retq', [])
         ]
@@ -828,10 +847,11 @@ class Compiler:
         if alignment > 0:
             prelude.append(Instr("subq", [Immediate(alignment), Reg("rsp")]))
             conclusion = [Instr("addq", [Immediate(alignment), Reg("rsp")])] + conclusion
-        final_instructions = prelude
-        final_instructions.extend(p.body)
-        final_instructions.extend(conclusion)
-        p.body = final_instructions
+        prelude.append(Jump("main_start"))
+        new_body = dict(p.body)
+        new_body["main"] = prelude
+        new_body["main_conclusion"] = conclusion
+        p.body = new_body
         self.log("\nprogram with prelude and conclusion:")
         self.log(p)
         return p
