@@ -723,7 +723,6 @@ class Compiler:
             for n in neighbours:
                 if n in self.vertex_colours.keys():
                     forbidden_colours[v].add(self.vertex_colours[n])
-            colours_taken = len(forbidden_colours[v])
         while len(forbidden_colours.items()) > 0:
             v: Variable
             max_found = -1
@@ -740,8 +739,13 @@ class Compiler:
                     done = True
                     break
             if not done:
+                taken_slots = {
+                    self.vertex_colours[n]
+                    for n in self.interference_graph.adjacent(v)
+                    if isinstance(n, Variable) and n in self.vertex_colours
+                }
                 i = self.reg_count
-                while i in forbidden_colours[v]:
+                while i in taken_slots:
                     i += 1
                 self.vertex_colours[v] = i
                 stack_slot_no = i - self.reg_count + 1
