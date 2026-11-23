@@ -2,7 +2,7 @@
 # See EOC-LICENSE for details
 import ast
 from ast import (expr, stmt, Module, Name)
-from x86_ast import (X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location, ByteReg)
+from x86_ast import (Jump, JumpIf, X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location, ByteReg)
 from cif import Begin, Goto, CProgram
 from graph import UndirectedAdjList
 import sys
@@ -465,8 +465,14 @@ class Compiler:
     # (But there is no type for atoms, so the type of e is given as expr.)
     def select_arg(self, e: expr) -> arg:
         match e:
-            case ast.Constant(int(val)):
-                return Immediate(val)
+            case ast.Constant(value):
+                match value:
+                    case bool():
+                        return Immediate(1 if value else 0)
+                    case int():
+                        return Immediate(value)
+                    case _:
+                        raise SyntaxError(f"Expected atom, got: {e}")
             case Name(var):
                 return Variable(var)
             case _:
@@ -519,6 +525,21 @@ class Compiler:
     def select_stmt(self, s: stmt) -> list[instr]:
         instructions = []
         match s:
+            case Goto(label):
+                instructions.append(Jump(label))
+            case ast.Return(value=(ast.Constant(value=int()) | Name()) as atm):
+                instructions.append(movq(self.select_arg(atm), Reg("rax")))
+                instructions.append(Jump("main_conclusion"))
+            case ast.If(
+                test=ast.Compare(left, [cmpop], [right]),
+                body=[Goto(l1)],
+                orelse=[Goto(l2)]
+            ):
+                left_a = self.select_arg(left)
+                right_a = self.select_arg(right)
+                instructions.append(Instr("cmpq", [right_a, left_a]))
+                instructions.append(JumpIf(self.cmp_to_cc(cmpop), l1))
+                instructions.append(Jump(l2))
             case ast.Expr(
                 value=ast.Call(
                     func=Name('print'),
@@ -609,16 +630,31 @@ class Compiler:
                         a = self.select_arg(a)
                         instructions.append(movq(a, target))
                         instructions.append(Instr("negq", [target]))
+                    case ast.Compare(left, [cmpop], [right]):
+                        instructions.extend(self.select_compare(target, cmpop, left, right))
+                    case ast.UnaryOp(ast.Not(), ast.Compare(left, [cmpop], [right])):
+                        instructions.extend(self.select_compare(target, self.negate_cmp(cmpop), left, right))
+                    case ast.UnaryOp(
+                        ast.Not(),
+                        (ast.Constant(value=int()) | Name()) as a
+                    ):
+                        a = self.select_arg(a)
+                        instructions.append(movq(a, target))
+                        instructions.append(Instr("xorq", [Immediate(1), target]))
                     case _:
                         raise SyntaxError(f"Unsupported expression type when processing line: {str(s)}")
             case _:
                 raise SyntaxError(f"Unsupported statement type when processing line: {str(s)}")
         return instructions
 
-    def select_instructions(self, p: Module) -> X86Program:
-        program = X86Program(body=[])
-        for s in p.body:
-            program.body.extend(self.select_stmt(s))
+    def select_instr_body(self, block: list[stmt]) -> list[instr]:
+        instructions = []
+        for s in block:
+            instructions.extend(self.select_stmt(s))
+        return instructions
+
+    def select_instructions(self, p: CProgram) -> X86Program:
+        program = X86Program(body={name: self.select_instr_body(block) for name, block in p.body.items()})
         self.log("\nafter select_instructions:")
         self.log(program)
         return program
