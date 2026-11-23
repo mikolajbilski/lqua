@@ -893,11 +893,17 @@ class Compiler:
             self.log(ast.dump(source_ast))
             shrunk_ast = self.shrink(source_ast)
             simplified_ast = self.remove_complex_operands(shrunk_ast)
-            program = self.select_instructions(simplified_ast)
-            self.uncover_live(program)
-            self.build_interference_graph(program)
-            program = self.allocate_registers(program)
-            #program = self.assign_homes(program)
+            c_program = self.explicate_control(simplified_ast)
+            program = self.select_instructions(c_program)
+            if len(program.body) == 1:
+                (label, body), = program.body.items()
+                single = X86Program(body=body)
+                self.uncover_live(single)
+                self.build_interference_graph(single)
+                single = self.allocate_registers(single)
+                program.body = {label: single.body}
+            else:
+                program = self.assign_homes_multiblock(program)
             program = self.patch_instructions(program)
             program = self.prelude_and_conclusion(program)
         finally:
