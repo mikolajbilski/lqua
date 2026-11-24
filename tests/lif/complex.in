@@ -1,0 +1,15 @@
+x = 2
+y = 5
+z = 8
+if x < 5 and not (y == 5 and z > 10):
+    x = 12
+    print(1)
+if 2 + 3 == 5 and x == 12:
+    print(1)
+if x > 0:
+    if y <= 10:
+        print(1)
+    else:
+        z = 20
+        print(0)
+print(z)

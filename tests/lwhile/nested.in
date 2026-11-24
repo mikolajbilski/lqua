@@ -1,0 +1,10 @@
+i = 0
+total = 0
+while i < 4:
+    j = 0
+    while j < 3:
+        total = total + i * j
+        j = j + 1
+    i = i + 1
+print(total)
+print(i)
