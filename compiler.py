@@ -5,6 +5,7 @@ from ast import (expr, stmt, Module, Name)
 from x86_ast import (Jump, JumpIf, X86Program, instr, arg, Variable, Instr, Immediate, movq, Reg, Callq, Deref, pushreg, popreg, location, ByteReg)
 from cif import Begin, Goto, CProgram
 from graph import UndirectedAdjList
+from collections import deque
 import sys
 import argparse
 
@@ -50,8 +51,9 @@ class Compiler:
     block_suffix: int
     debug: bool
     reg_count: int
-    live_after: dict[int, set[location]]
-    write_set: dict[int, set[location]]
+    live_after: dict[tuple[str, int], set[location]]
+    write_set: dict[tuple[str, int], set[location]]
+    live_before_block: dict[str, set[location]]
     interference_graph: UndirectedAdjList
     vertex_colours: dict[location, int]
     used_callee: set[Reg]
@@ -140,28 +142,70 @@ class Compiler:
         writes = {x for x in writes if isinstance(x, location)}
         return (reads, writes)
 
+    def sweep_block(self, label: str, block: list[instr],
+                    live_before_block: dict[str, set[location]],
+                    record: bool) -> set[location]:
+        live: set[location] = set()
+        for i in reversed(range(len(block))):
+            ins = block[i]
+            match ins:
+                case Jump(target):
+                    after = set(live_before_block.get(target, set()))
+                case JumpIf(_, target):
+                    after = live_before_block.get(target, set()) | live
+                case _:
+                    after = live
+            reads, writes = self.get_reads_writes(ins)
+            if record:
+                self.live_after[(label, i)] = after
+                self.write_set[(label, i)] = writes
+            live = (after - writes) | reads
+        return live
+
     def uncover_live(self, p: X86Program) -> None:
-        self.live_after = {len(p.body) - 1: set()}
+        blocks = p.body
+        predecessors: dict[str, set[str]] = {label: set() for label in blocks}
+        for label, block in blocks.items():
+            for ins in block:
+                if isinstance(ins, (Jump, JumpIf)) and ins.label in predecessors:
+                    predecessors[ins.label].add(label)
+
+        self.live_before_block = {label: set() for label in blocks}
+        worklist = deque(reversed(list(blocks)))
+        queued = set(blocks)
+        while worklist:
+            label = worklist.pop()
+            queued.discard(label)
+            live_before = self.sweep_block(label, blocks[label], self.live_before_block, False)
+            if live_before != self.live_before_block[label]:
+                self.live_before_block[label] = live_before
+                for pred in predecessors[label]:
+                    if pred not in queued:
+                        queued.add(pred)
+                        worklist.append(pred)
+
+        self.live_after = {}
         self.write_set = {}
-        for i in reversed(range(len(p.body))):
-            reads, writes = self.get_reads_writes(p.body[i])
-            self.live_after[i-1] = (self.live_after[i] - writes) | reads
-            self.write_set[i] = writes.copy()
+        for label, block in blocks.items():
+            self.sweep_block(label, block, self.live_before_block, True)
+        self.log("live-before sets of blocks:")
+        self.log(self.live_before_block)
         self.log("live-after set:")
         self.log(self.live_after)
 
     def build_interference_graph(self, p: X86Program) -> None:
         self.interference_graph = UndirectedAdjList()
-        for i in range(len(p.body)):
-            writes = self.write_set[i]
-            live_set = self.live_after[i].copy()
-            if isinstance(p.body[i], Instr) and p.body[i].instr == "movq":
-                live_set.discard(p.body[i].args[0])
-            for d in writes:
-                self.interference_graph.add_vertex(d)
-                for v in live_set:
-                    if d != v and not self.interference_graph.has_edge(d, v):
-                        self.interference_graph.add_edge(d, v)
+        for label, block in p.body.items():
+            for i, ins in enumerate(block):
+                writes = self.write_set[(label, i)]
+                live_set = self.live_after[(label, i)].copy()
+                if isinstance(ins, Instr) and ins.instr == "movq":
+                    live_set.discard(ins.args[0])
+                for d in writes:
+                    self.interference_graph.add_vertex(d)
+                    for v in live_set:
+                        if d != v and not self.interference_graph.has_edge(d, v):
+                            self.interference_graph.add_edge(d, v)
         self.log("interference graph edges:")
         self.log(self.interference_graph.edges())
 
@@ -224,6 +268,11 @@ class Compiler:
                               [self.shrink_stmt(s) for s in body],
                               [self.shrink_stmt(s) for s in orelse]
                               )
+            case ast.While(test, body, []):
+                return ast.While(self.shrink_exp(test),
+                                 [self.shrink_stmt(s) for s in body],
+                                 []
+                                 )
             case _:
                 raise SyntaxError(f"Unsupported statement type in shrink: {s}")
 
@@ -333,6 +382,9 @@ class Compiler:
                 body2 = self.rco_stmts(body)
                 orelse2 = self.rco_stmts(orelse)
                 return test_stmts + [ast.If(test2, body2, orelse2)]
+            case ast.While(test, body, []):
+                test2, test_tmps = self.rco_exp(test, False)
+                return [ast.While(self.bind_temps(test_tmps, test2), self.rco_stmts(body), [])]
             case _:
                 raise SyntaxError(f"Unsupported statement type when processing line: {s}")
         simple_stmts = []
@@ -407,6 +459,12 @@ class Compiler:
                 body2 = self.explicate_stmts(body, goto_cont, basic_blocks)
                 orelse2 = self.explicate_stmts(orelse, goto_cont, basic_blocks)
                 return self.explicate_pred(test, body2, orelse2, basic_blocks)
+            case ast.While(test, body, []):
+                goto_cont = self.create_block(cont, basic_blocks)
+                header = self._generate_block_name()
+                body2 = self.explicate_stmts(body, [Goto(header)], basic_blocks)
+                basic_blocks[header] = self.explicate_pred(test, body2, goto_cont, basic_blocks)
+                return [Goto(header)]
             case _:
                 raise SyntaxError(f"Unsupported statement type in explicate_stmt: {s}")
 
@@ -447,10 +505,27 @@ class Compiler:
                 return [ast.Assign(targets=[temp], value=cond)] + \
                     self.explicate_pred(temp, then, els, basic_blocks)
 
+    def remove_unreachable_blocks(self, blocks: dict[str, list[stmt]]) -> dict[str, list[stmt]]:
+        reachable: set[str] = set()
+        todo = ['main_start']
+        while todo:
+            label = todo.pop()
+            if label in reachable or label not in blocks:
+                continue
+            reachable.add(label)
+            for s in blocks[label]:
+                match s:
+                    case Goto(target):
+                        todo.append(target)
+                    case ast.If(_, [Goto(t1)], [Goto(t2)]):
+                        todo.extend([t1, t2])
+        return {label: block for label, block in blocks.items() if label in reachable}
+
     def explicate_control(self, p: Module) -> CProgram:
         basic_blocks: dict[str, list[stmt]] = {}
         cont = self.explicate_stmts(p.body, [ast.Return(ast.Constant(0))], basic_blocks)
         basic_blocks['main_start'] = cont
+        basic_blocks = self.remove_unreachable_blocks(basic_blocks)
         self.basic_blocks = basic_blocks
         prog = CProgram(body=basic_blocks)
         self.log("\nexplicated blocks:")
@@ -683,9 +758,6 @@ class Compiler:
 
     def assign_homes(self, p: X86Program) -> X86Program:
         home = {}
-        # There is an implicit assumption that a Compiler object will be used for compiling a single
-        # piece of code from start to finish, so we can store this value inside it. It's dirty, but it's
-        # better than recounting this in prelude_and_conclusion and assign_homes_{instr, arg}
         self.var_count = 0
 
         new_body = []
@@ -693,19 +765,6 @@ class Compiler:
             new_body.append(self.assign_homes_instr(ins, home))
         p.body = new_body
         self.log("\nafter assign_homes:")
-        self.log(p)
-        return p
-
-    def assign_homes_multiblock(self, p: X86Program) -> X86Program:
-        home: dict[Variable, arg] = {}
-        self.var_count = 0
-        self.used_callee = set()
-        new_body = {}
-        for label, block in p.body.items():
-            new_body[label] = [self.assign_homes_instr(ins, home) for ins in block]
-        p.body = new_body
-        self.stack_var_count = self.var_count
-        self.log("\nafter assign_homes_multiblock:")
         self.log(p)
         return p
 
@@ -773,10 +832,8 @@ class Compiler:
             homes[v] = home
         self.log("homes:")
         self.log(homes)
-        new_body = []
-        for ins in p.body:
-            new_body.append(self.assign_homes_instr(ins, homes))
-        p.body = new_body
+        p.body = {label: [self.assign_homes_instr(ins, homes) for ins in block]
+                  for label, block in p.body.items()}
         self.log("\nafter allocate_registers:")
         self.log(p)
         return p
@@ -899,15 +956,9 @@ class Compiler:
             simplified_ast = self.remove_complex_operands(shrunk_ast)
             c_program = self.explicate_control(simplified_ast)
             program = self.select_instructions(c_program)
-            if len(program.body) == 1:
-                (label, body), = program.body.items()
-                single = X86Program(body=body)
-                self.uncover_live(single)
-                self.build_interference_graph(single)
-                single = self.allocate_registers(single)
-                program.body = {label: single.body}
-            else:
-                program = self.assign_homes_multiblock(program)
+            self.uncover_live(program)
+            self.build_interference_graph(program)
+            program = self.allocate_registers(program)
             program = self.patch_instructions(program)
             program = self.prelude_and_conclusion(program)
         finally:
