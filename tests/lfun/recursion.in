@@ -1,0 +1,14 @@
+def fib(n):
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def is_even(n):
+    return 1 if n == 0 else is_odd(n - 1)
+
+def is_odd(n):
+    return 0 if n == 0 else is_even(n - 1)
+
+print(fib(input_int()))
+print(is_even(10))
+print(is_odd(7))

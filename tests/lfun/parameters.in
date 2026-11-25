@@ -1,0 +1,11 @@
+def mix(a, b, c, d, e, f):
+    return a - b + c * d - e // f
+
+def keep(x, y):
+    print(x)
+    z = mix(x, y, x, y, 10, 2)
+    print(y)
+    return z + x - y
+
+print(keep(input_int(), input_int()))
+print(mix(1, 2, 3, 4, 5, 6))
